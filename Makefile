@@ -692,9 +692,9 @@ ifeq ($(TARGET_ANDROID),0)
   endif
   
   # Check for Mouse Option
-  ifeq ($(EXT_OPTIONS_MENU),1)
-    CUSTOM_C_DEFINES += -DMOUSE_ACTIONS
-  endif
+  # ifeq ($(EXT_OPTIONS_MENU),1)
+  #  CUSTOM_C_DEFINES += -DMOUSE_ACTIONS
+  # endif
 
   # Check for Command Line Options
   ifeq ($(COMMAND_LINE_OPTIONS),1)
