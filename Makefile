@@ -56,7 +56,7 @@ CHEATS_ACTIONS ?= 1
 # Disable no drawing distance by default
 NODRAWINGDISTANCE ?= 0
 # Disable text-based save-files by default
-TEXTSAVES ?= 0
+TEXTSAVES ?= 1
 # Load resources from external files
 EXTERNAL_DATA ?= 0
 # Enable Discord Rich Presence
