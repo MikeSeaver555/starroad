@@ -50,7 +50,7 @@ TARGET_BITS ?= 0
 # Enable extended options menu by default
 EXT_OPTIONS_MENU ?= 1
 # Enable better camera (Puppycam)
-BETTERCAMERA ?= 1
+BETTERCAMERA ?= 0
 # Enable cheats
 CHEATS_ACTIONS ?= 1
 # Disable no drawing distance by default
