@@ -28,11 +28,13 @@
 #define MAX_JOYBUTTONS 32  // arbitrary; includes virtual keys for triggers
 #define AXIS_THRESHOLD (30 * 256)
 
-int mouse_x;
-int mouse_y;
-
-#ifdef BETTERCAMERA
-extern u8 newcam_mouse;
+#ifdef MOUSE_ACTIONS
+int gMouseXPos;
+int gMouseYPos;
+int gOldMouseXPos;
+int gOldMouseYPos;
+int gMouseHasFreeControl;
+int gMouseHasCenterControl;
 #endif
 
 static bool init_ok;
@@ -40,20 +42,24 @@ static bool haptics_enabled;
 static SDL_GameController *sdl_cntrl;
 static SDL_Haptic *sdl_haptic;
 
-static u32 num_joy_binds = 0;
-static u32 num_mouse_binds = 0;
 static u32 joy_binds[MAX_JOYBINDS][2];
-static u32 mouse_binds[MAX_JOYBINDS][2];
-
+static u32 num_joy_binds = 0;
 static bool joy_buttons[MAX_JOYBUTTONS] = { false };
+static u32 last_joybutton = VK_INVALID;
+
+#ifdef MOUSE_ACTIONS
+static u32 mouse_binds[MAX_JOYBINDS][2];
+static u32 num_mouse_binds = 0;
 static u32 mouse_buttons = 0;
 static u32 last_mouse = VK_INVALID;
-static u32 last_joybutton = VK_INVALID;
+bool last_cursor_status = false;
+#endif
 
 static inline void controller_add_binds(const u32 mask, const u32 *btns) {
     for (u32 i = 0; i < MAX_BINDS; ++i) {
         if (btns[i] >= VK_BASE_SDL_GAMEPAD && btns[i] <= VK_BASE_SDL_GAMEPAD + VK_SIZE) {
-            if (btns[i] >= VK_BASE_SDL_MOUSE && num_joy_binds < MAX_JOYBINDS) {
+            #ifdef MOUSE_ACTIONS
+            if (btns[i] >= VK_BASE_SDL_MOUSE && num_joy_binds < MAX_JOYBINDS && configMouse) {
                 mouse_binds[num_mouse_binds][0] = btns[i] - VK_BASE_SDL_MOUSE;
                 mouse_binds[num_mouse_binds][1] = mask;
                 ++num_mouse_binds;
@@ -62,6 +68,11 @@ static inline void controller_add_binds(const u32 mask, const u32 *btns) {
                 joy_binds[num_joy_binds][1] = mask;
                 ++num_joy_binds;
             }
+            #else
+                joy_binds[num_joy_binds][0] = btns[i] - VK_BASE_SDL_GAMEPAD;
+                joy_binds[num_joy_binds][1] = mask;
+                ++num_joy_binds;
+            #endif
         }
     }
 }
@@ -77,9 +88,11 @@ int GetJoystickNumAxes(int index) {
 
 static void controller_sdl_bind(void) {
     bzero(joy_binds, sizeof(joy_binds));
-    bzero(mouse_binds, sizeof(mouse_binds));
     num_joy_binds = 0;
+#ifdef MOUSE_ACTIONS
+    bzero(mouse_binds, sizeof(mouse_binds));
     num_mouse_binds = 0;
+#endif
 
     controller_add_binds(A_BUTTON,     configKeyA);
     controller_add_binds(B_BUTTON,     configKeyB);
@@ -92,19 +105,16 @@ static void controller_sdl_bind(void) {
     controller_add_binds(L_CBUTTONS,   configKeyCLeft);
     controller_add_binds(D_CBUTTONS,   configKeyCDown);
     controller_add_binds(R_CBUTTONS,   configKeyCRight);
+    controller_add_binds(U_JPAD,       configKeyDUp);
+    controller_add_binds(L_JPAD,       configKeyDLeft);
+    controller_add_binds(D_JPAD,       configKeyDDown);
+    controller_add_binds(R_JPAD,       configKeyDRight);
     controller_add_binds(L_TRIG,       configKeyL);
     controller_add_binds(R_TRIG,       configKeyR);
     controller_add_binds(START_BUTTON, configKeyStart);
 }
 
 static void controller_sdl_init(void) {
-    if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
-        fprintf(stderr, "SDL init error: %s\n", SDL_GetError());
-        return;
-    }
-
-    haptics_enabled = (SDL_InitSubSystem(SDL_INIT_HAPTIC) == 0);
-
     // try loading an external gamecontroller mapping file
     uint64_t gcsize = 0;
     void *gcdata = fs_load_file("gamecontrollerdb.txt", &gcsize);
@@ -118,11 +128,12 @@ static void controller_sdl_init(void) {
         free(gcdata);
     }
 
-#ifdef BETTERCAMERA
-    if (newcam_mouse == 1)
-        SDL_SetRelativeMouseMode(SDL_TRUE);
-    SDL_GetRelativeMouseState(&mouse_x, &mouse_y);
-#endif
+    if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
+        fprintf(stderr, "SDL init error: %s\n", SDL_GetError());
+        return;
+    }
+
+    haptics_enabled = (SDL_InitSubSystem(SDL_INIT_HAPTIC) == 0);
 
     controller_sdl_bind();
 
@@ -155,18 +166,33 @@ static inline void update_button(const int i, const bool new) {
     if (pressed) last_joybutton = i;
 }
 
-static void controller_sdl_read(OSContPad *pad) {
-    if (!init_ok) {
-        return;
-    }
+#ifdef MOUSE_ACTIONS
 
-#ifdef BETTERCAMERA
-    if (newcam_mouse == 1 && sCurrPlayMode != 2)
-        SDL_SetRelativeMouseMode(SDL_TRUE);
-    else
+void set_cursor_visibility(bool newVisibility ){
+    if(last_cursor_status != newVisibility){
+        SDL_ShowCursor( newVisibility ? SDL_DISABLE : SDL_ENABLE );
+        last_cursor_status = newVisibility;
+    }
+}
+
+static void mouse_control_handler(OSContPad *pad) {
+    u32 mouse;
+
+    if (configMouse) {
+        set_cursor_visibility(gMouseHasFreeControl || configWindow.fullscreen);
+
+        if (gMouseHasCenterControl && sCurrPlayMode != 2) {
+            SDL_SetRelativeMouseMode(SDL_TRUE);
+            mouse = SDL_GetRelativeMouseState(&gMouseXPos, &gMouseYPos);
+        } else {
+            SDL_SetRelativeMouseMode(SDL_FALSE);
+            mouse = SDL_GetMouseState(&gMouseXPos, &gMouseYPos);
+        }
+    } else {
+        set_cursor_visibility(false);
         SDL_SetRelativeMouseMode(SDL_FALSE);
-    
-    u32 mouse = SDL_GetRelativeMouseState(&mouse_x, &mouse_y);
+        mouse = SDL_GetMouseState(&gMouseXPos, &gMouseYPos);
+    }
 
     for (u32 i = 0; i < num_mouse_binds; ++i)
         if (mouse & SDL_BUTTON(mouse_binds[i][0]))
@@ -175,6 +201,16 @@ static void controller_sdl_read(OSContPad *pad) {
     // remember buttons that changed from 0 to 1
     last_mouse = (mouse_buttons ^ mouse) & mouse;
     mouse_buttons = mouse;
+}
+#endif
+
+static void controller_sdl_read(OSContPad *pad) {
+    if (!init_ok) {
+        return;
+    }
+
+#ifdef MOUSE_ACTIONS
+    mouse_control_handler(pad);
 #endif
 
     SDL_GameControllerUpdate();
@@ -190,8 +226,8 @@ static void controller_sdl_read(OSContPad *pad) {
         for (int i = 0; i < SDL_NumJoysticks(); i++) {
             if ( (GetJoystickNumAxes(i) > 0) && (SDL_GameControllerNameForIndex(i) != NULL) ) {
                 sdl_cntrl = SDL_GameControllerOpen(i);
-                break;
             }
+            break;
         }
     }
 
@@ -258,6 +294,8 @@ static void controller_sdl_read(OSContPad *pad) {
 
     magnitude_sq = (uint32_t)(rightx * rightx) + (uint32_t)(righty * righty);
     stickDeadzoneActual = configStickDeadzone * DEADZONE_STEP;
+    magnitude_sq = (uint32_t)(rightx * rightx) + (uint32_t)(righty * righty);
+    stickDeadzoneActual = configStickDeadzone * DEADZONE_STEP;
     if (magnitude_sq > (uint32_t)(stickDeadzoneActual * stickDeadzoneActual)) {
         pad->ext_stick_x = rightx / 0x100;
         int stick_y = -righty / 0x100;
@@ -282,13 +320,17 @@ static u32 controller_sdl_rawkey(void) {
         return ret;
     }
 
-    for (int i = 0; i < MAX_MOUSEBUTTONS; ++i) {
-        if (last_mouse & SDL_BUTTON(i)) {
-            const u32 ret = VK_OFS_SDL_MOUSE + i;
-            last_mouse = 0;
-            return ret;
+#ifdef MOUSE_ACTIONS
+    if (configMouse) {
+        for (int i = 0; i < MAX_MOUSEBUTTONS; ++i) {
+            if (last_mouse & SDL_BUTTON(i)) {
+                const u32 ret = VK_OFS_SDL_MOUSE + i;
+                last_mouse = 0;
+                return ret;
+            }
         }
     }
+#endif
     return VK_INVALID;
 }
 
